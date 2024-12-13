@@ -1,111 +1,101 @@
-// Import the file system module for reading files
 const fs = require('fs');
 
 function parseLogs() {
-    // Define the path to our log file
-    const file = 'app.log';
-    const file = 'Lucid.log';
-
-    // Initialize an object to store different types of log events
-    const logs = {
-        loginLogout: [],
-        configChanges: [],
-        daemonStopped: []
+    // The paths to the log files we want to read
+    const filePaths = ['app.log', 'Lucid.log'];
+    
+    // Object to store different types of log events
+    const logs = { 
+        loginLogout: [], 
+        configChanges: [], 
+        daemonStopped: [] 
     };
 
-    // Create a readable stream for the log file with UTF-8 encoding
-    const readStream = fs.createReadStream(file, { encoding: 'utf8' });
+    filePaths.forEach(filePath => {
+        // Create a readable stream for each log file with UTF-8 encoding
+        let readStream = fs.createReadStream(filePath, { encoding: 'utf8' });
+        
+        // Variable to hold the last line fragment when splitting chunks
+        let lastLineData = '';
 
-    // Buffer to store partial lines from chunks
-    let buffer = '';
+        // Event listener for when data is read from the file
+        readStream.on('data', chunk => {
+            // Combine any previous partial line with the new chunk and split into lines
+            let lines = (lastLineData + chunk).split('\n');
+            
+            // Save the last line of this chunk if it's not complete
+            lastLineData = lines.pop() || ''; 
 
-    // Event listener for incoming chunks of data from the file
-    readStream.on('data', chunk => {
-        // Append the new chunk to the buffer
-        buffer += chunk;
-        // Split the buffer into lines, keeping the last (potentially incomplete) line for later
-        let lines = buffer.split('\n');
-        buffer = lines.pop() || ''; // Keep the last partial line
+            // Process each complete line
+            lines.forEach(line => {
+                // Regex to match log entry format: time | level | pid | message
+                const match = line.match(/(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z) \| (\w) \| (\d+) \| (.*)/);
+                if (match) {
+                    const [, time, level, pid, message] = match;
 
-        // Process each complete line
-        lines.forEach(line => {
-            // Regex to match log entry format: time | level | pid | message
-            const match = line.match(/(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z) \| (\w) \| (\d+) \| (.*)/);
-            if (match) {
-                const [, time, level, pid, message] = match;
-                const logEntry = { time, level, pid, message };
+                    // Check for login/logout events
+                    if (message.includes('Linked to Filespace') || message.includes('Unlinked from Filespace')) {
+                        const userMatch = message.match(/user "([^"]+)"/);
+                        const user = userMatch ? userMatch[1] : 'user1';
+                        logs.loginLogout.push({ time, level, pid, user, action: message.includes('Linked') ? 'logged in' : 'logged out' });
+                    }
 
-                // 1.1. User Login/Logout
-                if (message.includes('Linked to Filespace') || message.includes('Unlinked from Filespace')) {
-                    // Extract user name from the message or default to 'user1'
-                    const userMatch = message.match(/user "([^"]+)"/);
-                    const action = message.includes('Linked') ? 'logged in' : 'logged out';
-                    logs.loginLogout.push({
-                        ...logEntry,
-                        user: userMatch ? userMatch[1] : 'user1',
-                        action
-                    });
+                    // Check for configuration changes
+                    if (message.includes('Config changed')) {
+                        logs.configChanges.push({ 
+                            time, 
+                            level, 
+                            pid, 
+                            change: message.replace('Config changed. Informing running legacy apps.', '').trim() || 'unspecified' 
+                        });
+                    }
+
+                    // Check if the daemon was stopped from outside the application
+                    if (message.includes('Stopping Lucid daemon') && !message.includes('USER ACTION')) {
+                        logs.daemonStopped.push({ time, level, pid, message });
+                    }
                 }
+            });
+        });
 
-                // 1.2. Local Configuration Changes
-                if (message.includes('Config changed')) {
-                    // Extract any details about the config change or mark as unspecified
-                    const changeDetails = message.replace('Config changed. Informing running legacy apps.', '').trim();
-                    logs.configChanges.push({
-                        ...logEntry,
-                        change: changeDetails || 'unspecified'
-                    });
+        // Event listener for when the stream ends (file reading is complete)
+        readStream.on('end', () => {
+            // Process any remaining data in lastLineData which wasn't a complete line
+            if (lastLineData) {
+                const match = lastLineData.match(/(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z) \| (\w) \| (\d+) \| (.*)/);
+                if (match) {
+                    const [, time, level, pid, message] = match;
+                    // Handle this last line just like others in the 'data' event
+                    if (message.includes('Linked to Filespace') || message.includes('Unlinked from Filespace')) {
+                        const userMatch = message.match(/user "([^"]+)"/);
+                        const user = userMatch ? userMatch[1] : 'user1';
+                        logs.loginLogout.push({ time, level, pid, user, action: message.includes('Linked') ? 'logged in' : 'logged out' });
+                    }
+                    if (message.includes('Config changed')) {
+                        logs.configChanges.push({ 
+                            time, 
+                            level, 
+                            pid, 
+                            change: message.replace('Config changed. Informing running legacy apps.', '').trim() || 'unspecified' 
+                        });
+                    }
+                    if (message.includes('Stopping Lucid daemon') && !message.includes('USER ACTION')) {
+                        logs.daemonStopped.push({ time, level, pid, message });
+                    }
                 }
-
-                // 1.3. Daemon Stopped from Outside
-                if (message.includes('Stopping Lucid daemon') && !message.includes('USER ACTION')) {
-                    // Log that the daemon was stopped externally
-                    logs.daemonStopped.push(logEntry);
-                }
+            }
+            // Only log the results after processing the last file
+            if (filePath === filePaths[filePaths.length - 1]) {
+                console.log('Login/Logout Events:', logs.loginLogout);
+                console.log('Configuration Changes:', logs.configChanges);
+                console.log('Daemon Stopped from Outside:', logs.daemonStopped);
             }
         });
-    });
 
-    // Event listener for when the stream ends (file reading is complete)
-    readStream.on('end', () => {
-        // Process any remaining data in the buffer (last line)
-        if (buffer) {
-            const match = buffer.match(/(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z) \| (\w) \| (\d+) \| (.*)/);
-            if (match) {
-                const [, time, level, pid, message] = match;
-                const logEntry = { time, level, pid, message };
-
-                // Handle the last line if it matches our criteria
-                if (message.includes('Linked to Filespace') || message.includes('Unlinked from Filespace')) {
-                    const userMatch = message.match(/user "([^"]+)"/);
-                    const action = message.includes('Linked') ? 'logged in' : 'logged out';
-                    logs.loginLogout.push({
-                        ...logEntry,
-                        user: userMatch ? userMatch[1] : 'unknown',
-                        action
-                    });
-                }
-                if (message.includes('Config changed')) {
-                    const changeDetails = message.replace('Config changed. Informing running legacy apps.', '').trim();
-                    logs.configChanges.push({
-                        ...logEntry,
-                        change: changeDetails || 'unspecified'
-                    });
-                }
-                if (message.includes('Stopping Lucid daemon') && !message.includes('USER ACTION')) {
-                    logs.daemonStopped.push(logEntry);
-                }
-            }
-        }
-        // Output the collected logs
-        console.log('Login/Logout Events:', logs.loginLogout);
-        console.log('Configuration Changes:', logs.configChanges);
-        console.log('Daemon Stopped from Outside:', logs.daemonStopped);
-    });
-
-    // Event listener for errors during file reading
-    readStream.on('error', error => {
-        console.error('Error reading file:', error.message);
+        // Event listener for any errors during reading or processing
+        readStream.on('error', error => {
+            console.error(`Error reading or processing file ${filePath}:`, error.message);
+        });
     });
 }
 
