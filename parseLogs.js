@@ -4,6 +4,8 @@ const fs = require('fs');
 function parseLogs() {
     // Define the path to our log file
     const file = 'app.log';
+    const file = 'Lucid.log';
+
     // Initialize an object to store different types of log events
     const logs = {
         loginLogout: [],
